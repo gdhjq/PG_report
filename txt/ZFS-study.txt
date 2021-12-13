@@ -1,0 +1,565 @@
+###############问与答#########################
+参考：https://github.com/zfsonlinux/zfs/wiki/FAQ
+
+1、什么是ZFS
+ZFS是OpenZFS在linux系统上的一个实现。
+OpenZFS是存储平台，它包含了传统文件系统、卷管理器等的功能。
+
+2、ZFS的硬件要求
+因为ZFS最初是为Sun Solaris设计的，一般大家都认为它是在大型机或小型机上使用的。
+但将ZFS移植到开源平台(BSDs、Illumos和Linux)之后，硬件需求就降低了。
+具体要求：
+  1、强力推荐采用支持ECC的内存的主机部署；
+  2、8GB或以上的内存，1GB也可能的，但使用重复数据删除，则需要更多的内存。
+  
+3、为何ZFS需要使用ECC的内存呢？
+为了保证数据的完整性，openZFS建使用ECC（Error Correcting Cod 即：错误检查和纠正）的内存。
+否则openzfs会把损坏的数据写到磁盘并且无法检测到错误。
+
+4、安装
+多大多数linux都有发布本安装包
+参考https://github.com/zfsonlinux/zfs/wiki/Getting-Started
+
+5、支持的硬件架构
+在linux系统上支持的架构包括：x86_64, x86, aarch64, arm, ppc64（power pc X64）, ppc（power pc）
+
+6、32位与64位的选着
+openzfs强烈推荐采用64位的CPU，使用32位的CPU可能带来稳定性的问题。
+ZFS最初是为Solaris内核开发的，与Solaris内核经常使用虚拟地址空间。
+但是Linux内核强烈反对使用虚拟地址空间。特别是32位的系统，在在32位的系统里虚拟地址空间默认限制为100M。
+在64位Linux内核也是不建议的，但由于地址空间比物理内存大得多。
+
+如果32位系统部署zfs，您将在系统日志中看到以下消息。
+ “vmap allocation for size 4198400 failed: use vmalloc=<size> to increase size”
+  解决的办法是在linux系统引导选内内添加“vmalloc=512M”。
+  
+ 消息：
+   OpenZFS计划对32位系统的支持取OpenZFS代码脱离对虚拟内存的依赖。
+   这样的变化还将提高OpenZFS管理ARC缓存的效率，并允许与标准Linux页面缓存进行高度集成。
+   
+7、从zfs引导系统
+    可以的
+	
+8、对常见pool是的设备选择
+  在创建ZFS池时可以使用不同的/dev目录下的设备的。可以使用/dev/sdX命名。
+  可以使用/dev/disk/by-id/命名。
+  同样可以使用/dev/disk/by-vdev命名。
+  
+    下面我们给出了几个建议：
+	1、/dev/sdx， /dev/hdx:最适合开发/测试
+	   在所有Linux发行版中都可用，并且经常使用。但是它们不是持久的。（即磁盘与设备名无法保证绝对一致）
+	   例如：zpool create tank /dev/sda /dev/sdb
+	   
+	2、/dev/disk/by-id/:适合小池(少于10个磁盘)
+	  采用的磁盘标识符。磁盘标识符通常由接口类型、供应商名称、型号、设备序列号和分区号组成。
+       由于id是绑定到磁盘上的，当把磁盘随意插拔后，pool依然可以正常识别的。
+	   物理位置配置冗余组变得困难。
+	   例如：zpool create tank scsi-SATA_Hitachi_HTS7220071201DP1D10DGG6HMRP
+	   
+    3、/dev/disk/by-path/: 适用于大型池(大于10个磁盘)
+	   描述了PCI总线编号、外壳名称和端口号。
+	   有助于定位在多控制器、多插槽的磁盘。
+	   例如：zpool create tank pci-0000:00:1f.2-scsi-0:0:0:0 pci-0000:00:1f.2-scsi-1:0:0:0
+	   
+    4、/dev/disk/by-vdev/: 适用于大型池(大于10个磁盘)，较完美的方法
+	    配置文件/etc/zfs/vdev_id.conf对设备命名进行管理。
+		jbod（just bunch of disks“简单磁盘绑定”）中的磁盘名称可以通过外壳id和槽号自动生成，以反映它们的物理位置。
+		这些名称还可以根据现有的udev设备链接手动分配，
+		包括/dev/disk/ bypath或/dev/disk/by-id中的链接。这允许您为磁盘选择自己独特的有意义的名称并在程序内显示。
+		
+9、/etc/zfs/vdev_id.conf配置
+for kk in b c d e f g h i
+ do
+    parted /dev/sd${kk} rm 1
+	parted /dev/sd${kk} rm 9
+ done
+  
+    后续补充
+	
+10、修改存在pool的设备名
+    更改通过简单地导出池并使用-d选项重新导入池来指定应该使用哪些新名称来完成。
+	（如果原来第8项描述的第二、三种方式创建的pool，可以采用此方式修改设备名）
+	像在/dev/disk/by-vde中使用自定义名称
+	例如： zpool export tank
+           zpool import -d /dev/disk/by-vdev tank
+		   
+11、/etc/zfs/zpool.cache文件
+   在系统上导入池，将被添加到/etc/zfs/zpool中。
+   该文件存储池配置信息，例如设备名称和池状态。
+   如果文件在运行zpool import命令时存在，那么它将用于确定可导入的池列表。
+   当文件中没有列出池时，需要使用zpool import -d /dev/disk/by-id命令检测并导入池。
+
+12、产生新的zpool.cache文件
+   更改池配置时，此文件将自动更新。
+   但是如果由于某种原因它变得腐败了，可以重新生成个/etc/zfs/zpool.cache文件,通过在池中设置cachefile属性来缓存文件。
+   例如：
+       zpool set cachefile=/etc/zfs/zpool.cache tank
+       注意：如果你有多个pool，估计要在每个pool上去设置这个参数了。
+   对于HA方式向的故障转移配置，设置cachefile=none来禁用缓存文件。
+   例如：
+       zpool set cachefile=none tank
+	   注意：如果你有多个pool，估计要在每个pool上去设置这个参数了。15018836451
+
+13、hole_birth Bugs
+    后续补充
+	
+14、CEPH/ZFS
+    后续补充
+	
+15、性能考量
+   下面给出了一个简单的最佳实践遵循标准。目前在Linux实现上的ZFS还没有针对性能进行优化。随着项目的成熟，我们可以期待性能的提高。
+   1、在控制器之间平衡磁盘:原则上尽量使用不同控制器上测存储设备
+   2、使用整个磁盘创建池:因为ZFS自动分区磁盘，以确保正确对齐。
+   3、有足够的内存:建议ZFS至少使用2GB的内存。（启用压缩和重复数据删除时必须增加内存）
+   4、设置ashift=12提高性能:通过设置ashift=12可以提高某些工作负载的性能。
+      这种调优只能在第一次创建池或向池中添加新的vdev时。
+	  这个调优参数会导致RAIDZ配置的容量减少。
+	  例如：
+	    zpool create -o ashift=12 tank raid1 /dev/sda dev/sdb
+	     
+16、AF（Advanced Format）磁盘
+   (AF)是一种新的磁盘格式，使用4,096字节，而不是512字节的扇区大小。
+   为了兼容性，许多AF磁盘模拟扇区大小为512字节。
+   默认情况下，ZFS将自动检测驱动器的扇区大小。
+   如果两个磁盘此用了不同扇区尺寸的这种组合，将导致未对齐的磁盘访问，这将大大降低池的性能。
+   在zpool命令中添加了设置ashift属性的能力，强制指定扇区尺寸大小。
+   ashift值范围从9到16，默认值为0，这意味着zfs应该自动检测扇区大小。
+   注意：
+     ashift值为512个字节是9(2 ^ 9 = 512),而4096字节ashift值为12(2 ^ 12 = 4096)
+   例如：
+      创建pool时，指定扇区尺寸
+	    zpool create -o ashift=12 tank raid1 /dev/sda dev/sdb
+	  添加设备到pool，指定扇区尺寸
+	    zpool add -o ashift=12 tank mirror sdc sdd （原来的pool定义的扇区尺寸必须也是4096）
+		
+17、使用zvol当swap设备
+   要求：
+     1、卷块大小匹配系统页面大小（内存），防止较大的块上执行读-修改-写操作。
+	 2、logbias=throughput和sync=always属性。写入到卷中的数据将立即刷新到磁盘，以尽可能快的速度释放内存。
+	 3、设置primarycache=metadata，以避免ARC在RAM中保存交换数据
+	 4、禁止快照此此卷上。
+   例如：
+     zfs create -V 4G -b $(getconf PAGESIZE) -o logbias=throughput -o sync=always -o primarycache=metadata -o com.sun:auto-snapshot=false rpool/swap
+    
+18、Using ZFS on Xen Hypervisor or Xen Dom0
+     后续补充
+	 
+19、禁止udisks2对zvol去创建/dev/mapper/条目
+    为了防止udisks2创建/dev/mapper条目，创建一个udev规则。例如/etc/udev/rules.d/80-udisks2-ignore-zfs.rules。
+	 包含以下内容：
+	   ENV{ID_PART_ENTRY_SCHEME}=="gpt", 
+	   ENV{ID_FS_TYPE}=="zfs_member",
+	   ENV{ID_PART_ENTRY_TYPE}=="6a898cc3-1dd2-11b2-99a6-080020736631", 
+	   ENV{UDISKS_IGNORE}="1"
+	   
+	   
+########################vdev#######################################
+参考：https://pthree.org/2012/12/04/zfs-administration-part-i-vdevs/
+
+1、vdev介绍
+    1、磁盘(默认)-系统中的物理硬盘
+	2、文件-预先分配的file/image的绝对路径
+	3、镜像-标准软件RAID-1镜像
+	4、raidz1/2/3-非标准的distributed parity-based的软件RAID级别
+	5、spare-被ZFS软件RAID标记为“热备用”的硬盘
+	6、cache- Device used for a level 2 adaptive read cache (L2ARC)
+	7、log-A separate log (SLOG) called the "ZFS Intent Log" or ZIL
+   注意：
+   VDEVs始终是dynamically striped。
+
+2、使用zpool注意事项
+   1、设备一旦添加到VDEV，就无法删除
+   2、你不能缩小pool，只能让它成长
+   3、RAID-0比RAID-1快，RAID-1比RAIDZ-1快，RAIDZ-1比RAIDZ-2快，RAIDZ-2比RAIDZ-3快
+   4、故障发生时，hot space 盘不会自动替换故障盘，除非修改设置允许。
+   5、在替换故障盘时，当替换硬盘大于故障盘，zpool将不会动态重新调整。除非在第一个磁盘替换之前启用该设置。默认设置为off。
+   6、如果驱动器支持AF功能，池将以4k为尺寸划分磁盘扇区
+   7、数据去重对资源的消耗的巨大的，如果没有足够的内存，并且池设备不是本地盘请不要轻易开启
+   8、压缩对于zfs消耗资源非常小建议开启，但是默认是禁用的。
+   9、zfs的文件系统碎片与其它文件系统一样，要定期整理，否者对性能影响严重
+   10、ZFS支持本地加密，但它不是自由软件。它的版权归甲骨文所有。
+   
+3、创建pool举例
+   zpool create tank sde sdf sdg sdh
+   # zpool status tank
+     pool: tank
+     state: ONLINE
+     scan: none requested
+    config:
+	 NAME         STATE     READ WRITE CKSUM
+	 tank        ONLINE       0     0     0
+	  sde        ONLINE       0     0     0
+	  sdf        ONLINE       0     0     0
+	  sdg        ONLINE       0     0     0
+	  sdh        ONLINE       0     0     0
+    errors: No known data errors
+	
+	
+	# zpool create tank mirror sde sdf sdg sdh
+    # zpool status tank
+      pool: tank
+      state: ONLINE
+      scan: none requested
+    config:
+	 NAME        STATE     READ WRITE CKSUM
+	 tank        ONLINE       0     0     0
+	  mirror-0   ONLINE       0     0     0
+	    sde      ONLINE       0     0     0
+	    sdf      ONLINE       0     0     0
+	    sdg      ONLINE       0     0     0
+	    sdh      ONLINE       0     0     0
+     errors: No known data errors
+	 
+	 
+   # zpool create tank mirror sde sdf mirror sdg sdh
+   # zpool status
+    pool: tank
+    state: ONLINE
+    scan: none requested
+   config:
+
+	 NAME        STATE     READ WRITE CKSUM
+	 tank        ONLINE       0     0     0
+	  mirror-0   ONLINE       0     0     0
+	    sde      ONLINE       0     0     0
+	    sdf      ONLINE       0     0     0
+	  mirror-1   ONLINE       0     0     0
+	    sdg      ONLINE       0     0     0
+	    sdh      ONLINE       0     0     0
+    errors: No known data errors
+	
+	
+  # for i in {1..4}; do dd if=/dev/zero of=/tmp/file$i bs=1G count=4 &> /dev/null; done
+  # zpool create tank /tmp/file1 /tmp/file2 /tmp/file3 /tmp/file4
+  # zpool status tank
+    pool: tank
+    state: ONLINE
+    scan: none requested
+  config:
+
+	 NAME          STATE     READ WRITE CKSUM
+	 tank          ONLINE       0     0     0
+	  /tmp/file1   ONLINE       0     0     0
+	  /tmp/file2   ONLINE       0     0     0
+	  /tmp/file3   ONLINE       0     0     0
+	  /tmp/file4   ONLINE       0     0     0
+  errors: No known data errors
+  
+   #zpool create tank raidz1 /dev/sdd /dev/sde /dev/sdf /dev/sdg log mirror  /dev/disk/by-id/ata-OCZ-REVODRIVE_OCZ-33W9WE11E9X73Y41-part1 /dev/disk/by-id/ata-OCZ-REVODRIVE_OCZ-X5RG0EIY7MN7676K-part1 cache /dev/disk/by-id/ata-OCZ-REVODRIVE_OCZ-33W9WE11E9X73Y41-part2 /dev/disk/by-id/ata-OCZ-REVODRIVE_OCZ-X5RG0EIY7MN7676K-part2
+   # zpool status pool
+     pool: pool
+     state: ONLINE
+     scan: scrub repaired 0 in 2h23m with 0 errors on Sun Dec  2 02:23:44 2012
+   config:
+
+        NAME                                              STATE     READ WRITE CKSUM
+        pool                                              ONLINE       0     0     0
+          raidz1-0                                        ONLINE       0     0     0
+            sdd                                           ONLINE       0     0     0
+            sde                                           ONLINE       0     0     0
+            sdf                                           ONLINE       0     0     0
+            sdg                                           ONLINE       0     0     0
+        logs
+          mirror-1                                        ONLINE       0     0     0
+            ata-OCZ-REVODRIVE_OCZ-33W9WE11E9X73Y41-part1  ONLINE       0     0     0
+            ata-OCZ-REVODRIVE_OCZ-X5RG0EIY7MN7676K-part1  ONLINE       0     0     0
+        cache
+          ata-OCZ-REVODRIVE_OCZ-33W9WE11E9X73Y41-part2    ONLINE       0     0     0
+          ata-OCZ-REVODRIVE_OCZ-X5RG0EIY7MN7676K-part2    ONLINE       0     0     0
+     errors: No known data error
+	 注意：
+	   上面的logs及cache使用的设备名都是磁盘的by-id。
+	   
+	   
+#####################RAIDZ#######################
+参考：https://pthree.org/2012/12/05/zfs-administration-part-ii-raidz/
+
+1、标准的Parity RAID
+   传统raid的问题（raid5或raid6）：
+     1、当系统突然断电时，可能出现数据已正常写入到磁盘但校验信息还未完成写入。这样就会出现数据不一致的问题。
+	 2、当有效写入数据小于条带尺寸时，在计算校验值时也会把条带内非有效数据独处并完成校验码的计算。
+	 以上两个问题硬、软raid的产平如何解决呢？
+	     硬件raid卡通过电池保护的方式有效的解决第一个问题。
+	     硬件raid卡通过NVRAM硬件（cache）来实现隐藏这种额外工作带来的延迟感受来解决第二个问题。
+	     软raid目前没有很好的觉决办法。
+
+2、ZFS RAIDZ	 
+   1、条带尺寸动态设置的，事务刷新到磁盘的每个块都有自己的条纹宽度。每一个RAIDZ写是一个完整的条纹写。
+   2、奇偶校验位与条纹同时刷新，像电源故障的情况下，要么是最新的数据，要么没有，磁盘数据不会不一致。
+
+3、Self-healing（自愈）RAID   
+   重要的事情说三遍！！ 强 强 强 
+   
+   ZFS可以检测 silent errors，并动态修复它们。
+   步骤：ZFS按照构造条带的方法，并将每个块与元数据中的默认校验和进行比较。
+   如果已读条带与校验和不匹配，ZFS会找到损坏的块，然后读取奇偶校验，并通过组合重构修复它。然后将良好的数据返回到应用程序
+   
+4、举例：
+   # zpool create tank raidz1 sde sdf sdg
+   # zpool status tank
+     pool: pool
+     state: ONLINE
+     scan: none requested
+    config:
+
+        NAME          STATE     READ WRITE CKSUM
+        pool          ONLINE       0     0     0
+          raidz1-0    ONLINE       0     0     0
+            sde       ONLINE       0     0     0
+            sdf       ONLINE       0     0     0
+            sdg       ONLINE       0     0     0
+
+     errors: No known data errors
+	 （至少3块盘）
+	 
+	 
+   # zpool create tank raidz2 sde sdf sdg sdh
+   # zpool status tank
+      pool: pool
+      state: ONLINE
+      scan: none requested
+   config:
+
+        NAME          STATE     READ WRITE CKSUM
+        pool          ONLINE       0     0     0
+          raidz2-0    ONLINE       0     0     0
+            sde       ONLINE       0     0     0
+            sdf       ONLINE       0     0     0
+            sdg       ONLINE       0     0     0
+            sdh       ONLINE       0     0     0
+    errors: No known data errors
+	（至少4块盘）
+	
+	
+   # zpool create tank raidz3 sde sdf sdg sdh sdi
+   # zpool status tank
+     pool: pool
+     state: ONLINE
+     scan: none requested
+   config:
+
+        NAME          STATE     READ WRITE CKSUM
+        pool          ONLINE       0     0     0
+          raidz3-0    ONLINE       0     0     0
+            sde       ONLINE       0     0     0
+            sdf       ONLINE       0     0     0
+            sdg       ONLINE       0     0     0
+            sdh       ONLINE       0     0     0
+            sdi       ONLINE       0     0     0
+    errors: No known data errors
+	（至少5块盘）
+	
+	
+	Hybrid RAIDZ
+   # zpool create tank raidz1 sde sdf sdg raidz1 sdh sdi sdj raidz1 sdk sdl sdm raidz1 sdn sdo sdp
+   # zpool status tank
+      pool: pool
+      state: ONLINE
+      scan: none requested
+    config:
+
+        NAME          STATE     READ WRITE CKSUM
+        pool          ONLINE       0     0     0
+          raidz1-0    ONLINE       0     0     0
+            sde       ONLINE       0     0     0
+            sdf       ONLINE       0     0     0
+            sdg       ONLINE       0     0     0
+          raidz1-1    ONLINE       0     0     0
+            sdh       ONLINE       0     0     0
+            sdi       ONLINE       0     0     0
+            sdj       ONLINE       0     0     0
+          raidz1-2    ONLINE       0     0     0
+            sdk       ONLINE       0     0     0
+            sdl       ONLINE       0     0     0
+            sdm       ONLINE       0     0     0
+          raidz1-3    ONLINE       0     0     0
+            sdn       ONLINE       0     0     0
+            sdo       ONLINE       0     0     0
+            sdp       ONLINE       0     0     0
+     errors: No known data errors
+	 注意：
+	   1、性能与可用空间的较好平衡
+	   2、相比单一大的raidZ，混合方式在存在大量文件碎片的情况下依然有较好性能的保障。
+	   
+网上流传的观点：
+  1、RAIDZ-1和RAIDZ-3应该使用奇数个磁盘。
+  2、RAIDZ-1应该从3个磁盘开始，数组中不超过7个磁盘。
+  3、RAIDZ-3应该从7个磁盘开始，不超过15个磁盘。
+  4、RAIDZ-2应该使用偶数个磁盘，从6个磁盘开始，不超过12个。
+  5、RAIDZ-1的磁盘大小不超过1TB。
+  6、RAIDZ-2的磁盘大小不超过2TB。
+  7、RAIDZ-3的磁盘大小不超过3TB。
+  8、对于超过这些值的大小，您应该使用带条纹的2-way或3-way镜像
+  
+  
+##########################The ZFS Intent Log (ZIL)###############################
+参考：https://pthree.org/2012/12/06/zfs-administration-part-iii-the-zfs-intent-log/
+
+1、Terminology（技术概要）
+   1、ZFS Intent Log（ZIL）
+     1）一种日志机制，将写入的所有数据存储起来，然后作为事务写入刷新。与日志文件系统(如ext3或ext4)的日志功能类似。
+	 2）Consists of a ZIL header which points to a list of records, ZIL blocks and a ZIL trailer。
+	 3）ZIL是有不同的写入方法。对于小于64KB的写操作(默认情况下)，ZIL存储写数据。
+	    对于较大的写操作，写操作不存储在ZIL中，ZIL维护指向存储在日志记录中的同步数据的指针。
+	  注意：小于或等于64K数据的写操作，都是存放在内存中。
+	        当大于64K数据的写操作，ZIL在内存给里留个指针，其实数据是放在磁盘上或是专用快速的SLOG磁盘上的。
+   2、Separate Intent Log（SLOG）
+     1）一个单独的日志记录设备，它缓存ZIL的同步部分，然后将它们刷新到较慢的磁盘。
+	 2）SLOG只缓存同步数据，不缓存异步数据。异步数据将直接刷新到旋转磁盘。
+	 3）如果SLOG存在，则ZIL将移动到SLOG设备上而不是驻留在磁盘上。
+	    
+   注意：
+     1）ZIL是SLOG的子集。SLOG是设备，ZIL是设备上的数据。
+     2）并不是所有应用程序都使用ZIL。数据库(MySQL、PostgreSQL、Oracle)、NFS和iSCSI目标等应用程序都使用ZIL。
+	 3）文件系统周围数据的复制不会使用它。
+	 4）除非在引导时查看是否有丢失的事务，否则通常不会读取ZIL。ZIL基本上是“只写”的。
+	 
+2、SLOG Devices
+   1、带电池的NVRAM
+   2、SSD 类似于PCI-Express OCZ ssd或Intel。最好是SLC的SSD。
+   3、10K+的SAS磁盘
+   
+   
+   
+   
+##########ACID#####################
+1、A (Atomicity) 原子性
+原子性很容易理解，也就是说事务里的所有操作要么全部做完，要么都不做，事务成功的条件是事务里的所有操作都成功，只要有一个操作失败，整个事务就失败，需要回滚。
+
+比如银行转账，从A账户转100元至B账户，分为两个步骤：1）从A账户取100元；2）存入100元至B账户。这两步要么一起完成，要么一起不完成，如果只完成第一步，第二步失败，钱会莫名其妙少了100元。
+
+2、C (Consistency) 一致性
+一致性也比较容易理解，也就是说数据库要一直处于一致的状态，事务的运行不会改变数据库原本的一致性约束。
+
+例如现有完整性约束a+b=10，如果一个事务改变了a，那么必须得改变b，使得事务结束后依然满足a+b=10，否则事务失败。
+
+3、I (Isolation) 独立性
+所谓的独立性是指并发的事务之间不会互相影响，如果一个事务要访问的数据正在被另外一个事务修改，只要另外一个事务未提交，它所访问的数据就不受未提交事务的影响。
+比如现有有个交易是从A账户转100元至B账户，在这个交易还未完成的情况下，如果此时B查询自己的账户，是看不到新增加的100元的。
+
+4、D (Durability) 持久性
+持久性是指一旦事务提交后，它所做的修改将会永久的保存在数据库上，即使出现宕机也不会丢失。
+
+
+###############ZIL#############
+参考：https://pthree.org/2012/12/06/zfs-administration-part-iii-the-zfs-intent-log/
+1、ZFS Intent Log, or ZIL
+    1）ZIL是一种日志机制，将写入的所有数据存储起来，然后作为事务写入刷新；
+	2)
+
+
+
+
+#######################ARC####################
+1、cache技术：
+   1、LRU（ Least Recently Used caching algorithm：最近在最少使用）	
+       理解：如果数据最近被访问过，那么将来被访问的几率也更高
+	   分析：当存在热点数据时，LRU的效率很好，但偶发性的、周期性的批量操作会导致LRU命中率急剧下降
+   2、LFU（least frequently used ）
+       理解：如果数据过去被访问多次，那么将来被访问的频率也更高
+	   分析：一般情况下，LFU效率要优于LRU。
+	         它能够避免周期性或者偶发性的操作导致缓存命中率下降的问题。
+			 但LFU需要记录数据的历史访问记录，一旦数据访问模式改变，LFU需要更长时间来适用新的访问模式。
+2、The ZFS ARC
+   1、adjustable replacement cache(ARC)就是这样一种缓存机制。
+	  它既可以缓存最近的块请求，也可以缓存频繁的块请求。
+   2、技术术语：
+      i）
+	   Adjustable Replacement Cache, or ARC- A cache residing in physical RAM. It is built using two caches- the most frequently used cached and the most recently used cache. A cache directory indexes pointers to the caches, including pointers to disk called the ghost frequently used cache, and the ghost most recently used cache.
+      ii）
+	   Cache Directory- An indexed directory of pointers making up the MRU, MFU, ghost MRU and ghost MFU caches.
+      iii）
+	   MRU Cache- The most recently used cache of the ARC. The most recently requested blocks from the filesystem are cached here.
+      iiii）
+	   MFU Cache- The most frequently used cache of the ARC. The most frequently requested blocks from the filesystem are cached here.
+      iiiii）
+	   Ghost MRU- Evicted pages from the MRU cache back to disk to save space in the MRU. Pointers still track the location of the evicted pages on disk.
+       iiiiii）
+	   Ghost MFU- Evicted pages from the MFU cache back to disk to save space in the MFU. Pointers still track the location of the evicted pages on disk.
+       iiiiiii)
+	   Level 2 Adjustable Replacement Cache, or L2ARC- A cache residing outside of physical memory, typically on a fast SSD. It is a literal, physical extension of the RAM ARC
+	 
+###############Scrub and Resilver###############################
+参考：https://pthree.org/2012/12/11/zfs-administration-part-vi-scrub-and-resilver/
+1、传统方式分析  
+  文件系统检查实用程序来验证磁盘上的数据完整性。使用“fsck”实用程序完成。
+    传统的“FSCK”方式的缺点：
+	 1、fsck磁盘时，产盘必须umount。此时文件系统是无法使用的。
+	 2、文件系统(ext3或ext4或XFS)完全独立于底层数据结构(如LVM或RAID)，
+	    没有任何控制磁盘的数据,和解决存储块的腐败问题。对于这种问题我们称呼为“silent data errors”
+		
+2、ZFS Scrubbing
+   通过Scrubbing来检测和纠正静默数据错误。类似ECC RAM的方式，可以在线、及时的修复文件系统上的问题。
+    1、scrubbing是在zfs pool的层面上。
+    2、scrubbing在执行上类似与fsck,需要手动执行或是使用crontab方式指定计划
+	3、SAS或SSD盘每个月发起一次，如果是STAT或SCSI盘每周发起一次
+	4、性能影响
+	常用命令：
+	# zpool scrub tank    开始
+	# zpool scrub -s tank 停止
+	# zpool scrub -p tank  暂停
+	
+3、Self Healing Data	
+ 如果存储池用某种冗余，那么ZFS不仅将检测擦洗上的“silent data errors”，
+ 那么要是在不同的磁盘上存在良好的数据，它还将纠正错误，称为“自愈”。
+   注意：
+    1、完成故障盘丢失数据的自愈
+	2、某一个坏块丢失数据的自愈
+		
+4、Resilvering Data
+  与传统系统上的raid与lvm在数据重构上的区别是：
+  不需要对更换的完整硬盘全部同步，实际的同步时间取决于实际需要同步的数据量。
+  
+###########zpool Best Practices and Caveats##########################
+参考：https://pthree.org/2012/12/13/zfs-administration-part-viii-zpool-best-practices-and-caveats/
+ 推荐：
+   1、部署zfs系统内核为64位
+   2、系统内存最小1G，推荐4G(其中有2G的内存系统优化用于ARC)
+   3、用支持ECC RAM技术的内存。（发挥scrubbing优势）
+   4、zpool池内硬盘为完整磁盘分区
+   5、同一zfs pool内的VDEV大小一样。
+   6、zfs pool使用冗余保护
+   7、建议使用mirror方式
+   8、预留hot spaces盘
+   9、使用分层pool 利用SLOG（mirror 1G）及LARC（stripe）技术
+   10、保持pool使用不超过80%
+   11、周期的scrubbing
+   12、4k的存储块定义（默认512）
+   13、对于pool，将"autoexpand" to on。默认为off
+   14、移动存储使用export方式
+   15、写操作mirror性能优势明显，随机读mirror性能优势明显，连续度raidz性能优势明显（是stripe mirror）
+   16、打开数据压缩，默认是关闭的。
+   
+  注意：
+   1、在一个pool内最低VDEV的iops决定整体iops。
+   2、在pool内的vdev设备，它的存储空间的1/64空间要用于存储其zfs管理元数据。
+      例如：
+	    一块硬盘raw容量为640G，那么在zfs管理下可用630G。
+   3、raid卡下使用JBOD或是passthrough模式的逻辑盘。
+   4、不要使用其它管理软件
+   5、不要共享存储设备在不同pool内
+   6、zfs非cluster FS
+   7、统一pool内冗余机制
+   8、不要混合不同大小或转速的VDEV在同一个pool
+   9、同一pool的VDEV内的磁盘数量一致
+   10、pool的VDEV内的磁盘不要是同一控制器
+   11、hot spaces 不能添加到VDEV内
+       设置autoreplace 功能开启. 
+	   例："zpool set autoreplace=on tank"
+   12、当用较大硬盘替换较小硬盘时，pool是不会自动调整大小。
+       如果要pool会自动调整，在替换第一个磁盘之前启用此功能
+	   例如：
+	      zpool set autoexpand=on tank
+   13、pool只可以添加VDEV，不可以减少VDEV。
+   14、Linux内核可能每次引导时分配给驱动器不同的驱动器号。
+   15、pool不要太大（即2的77次方字节）
+
+
+######################zfs Best Practices and Caveats########################## 
+参考：https://pthree.org/2013/01/03/zfs-administration-part-xvii-best-practices-and-caveats/
+推荐：
+  1、启用压缩。 
+  2、避免使用去重功能“deduplication”，消耗内存。
+  3、避免使用ZFS用于系统引导。（linux 系统）
+  4、快照
+  5、快照不是备份，可以使用"zfs send" and "zfs receive"去发射快照数据到其它存储环境。
